@@ -85,19 +85,47 @@ HTML = """
     --success: #4caf82;
     --radius: 14px;
   }
+  body.light {
+    --bg: #f4f4f8;
+    --card: #ffffff;
+    --border: #dcdce8;
+    --text: #1a1a2e;
+    --muted: #6b6b80;
+  }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     min-height: 100vh;
     padding: 20px 16px 40px;
+    transition: background .25s, color .25s;
+  }
+  /* ── Header row ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    margin-bottom: 4px;
   }
   h1 {
-    text-align: center;
     font-size: 1.4rem;
     font-weight: 700;
     letter-spacing: .5px;
-    margin-bottom: 4px;
+  }
+  /* ── Theme toggle ── */
+  #theme-btn {
+    position: absolute;
+    right: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    font-size: .82rem;
+    cursor: pointer;
+    color: var(--text);
+    transition: background .2s, border-color .2s;
+    white-space: nowrap;
   }
   .subtitle {
     text-align: center;
@@ -243,7 +271,10 @@ HTML = """
 </style>
 </head>
 <body>
-<h1>📡 ShareData Locally</h1>
+<div class="header">
+  <h1>📡 ShareData Locally</h1>
+  <button id="theme-btn">☀️ Light</button>
+</div>
 <p class="subtitle">Send files from your phone to this PC</p>
 
 <!-- Upload card -->
@@ -274,6 +305,19 @@ const fileList   = document.getElementById('file-list');
 const uploadBtn  = document.getElementById('upload-btn');
 const receivedEl = document.getElementById('received-list');
 const toast      = document.getElementById('toast');
+
+// ── Theme toggle ─────────────────────────────────────────────────────────────
+const themeBtn = document.getElementById('theme-btn');
+const savedTheme = localStorage.getItem('qrdrop-theme') || 'dark';
+if (savedTheme === 'light') {
+  document.body.classList.add('light');
+  themeBtn.textContent = '🌙 Dark';
+}
+themeBtn.addEventListener('click', () => {
+  const isLight = document.body.classList.toggle('light');
+  themeBtn.textContent = isLight ? '🌙 Dark' : '☀️ Light';
+  localStorage.setItem('qrdrop-theme', isLight ? 'light' : 'dark');
+});
 
 let selectedFiles = [];
 
