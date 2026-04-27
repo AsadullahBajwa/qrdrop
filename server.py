@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 import qrcode
+import subprocess
+import sys
 from flask import Flask, render_template_string, request, send_from_directory, jsonify
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -287,6 +289,64 @@ HTML = """
     cursor: pointer;
   }
 
+  /* ── Clipboard card ── */
+  #clip-input {
+    width: 100%;
+    min-height: 90px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: .9rem;
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+    transition: border-color .2s;
+  }
+  #clip-input:focus { border-color: var(--accent); }
+  #clip-btn {
+    width: 100%;
+    margin-top: 10px;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    font-size: .95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .2s, transform .1s;
+  }
+  #clip-btn:active { transform: scale(.98); }
+
+  /* ── Clipboard history ── */
+  .clip-entry {
+    background: rgba(255,255,255,.04);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    font-size: .85rem;
+    word-break: break-word;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .clip-entry .clip-text { flex: 1; white-space: pre-wrap; }
+  .clip-entry .clip-time { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+  .clip-copy-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: .75rem;
+    padding: 2px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .2s, border-color .2s;
+  }
+  .clip-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+
   /* ── Toast ── */
   #toast {
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -319,6 +379,14 @@ HTML = """
   </div>
   <div id="file-list"></div>
   <button id="upload-btn" disabled>Upload</button>
+</div>
+
+<!-- Clipboard share card -->
+<div class="card">
+  <h2>📋 Send Text / Link to PC</h2>
+  <textarea id="clip-input" placeholder="Paste a URL, phone number, note, or any text…"></textarea>
+  <button id="clip-btn">Send to PC Clipboard</button>
+  <div id="clip-history"></div>
 </div>
 
 <!-- Received files card -->
@@ -474,6 +542,56 @@ uploadBtn.addEventListener('click', async () => {
   }, 3000);
 });
 
+// ── Clipboard share ───────────────────────────────────────────────────────────
+const clipInput   = document.getElementById('clip-input');
+const clipBtn     = document.getElementById('clip-btn');
+const clipHistory = document.getElementById('clip-history');
+
+function renderClipHistory() {
+  const items = JSON.parse(localStorage.getItem('qrdrop-clips') || '[]');
+  if (!items.length) { clipHistory.innerHTML = ''; return; }
+  clipHistory.innerHTML = items.slice(0, 10).map((c, i) => `
+    <div class="clip-entry">
+      <span class="clip-text">${c.text}</span>
+      <span class="clip-time">${c.time}</span>
+      <button class="clip-copy-btn" onclick="copyClip(${i})">Copy</button>
+    </div>`).join('');
+}
+
+function copyClip(index) {
+  const items = JSON.parse(localStorage.getItem('qrdrop-clips') || '[]');
+  navigator.clipboard.writeText(items[index].text).then(() => showToast('Copied!'));
+}
+
+clipBtn.addEventListener('click', async () => {
+  const text = clipInput.value.trim();
+  if (!text) return;
+
+  try {
+    const res = await fetch('/clipboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (res.ok) {
+      const now   = new Date();
+      const time  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const items = JSON.parse(localStorage.getItem('qrdrop-clips') || '[]');
+      items.unshift({ text, time });
+      localStorage.setItem('qrdrop-clips', JSON.stringify(items.slice(0, 20)));
+      renderClipHistory();
+      clipInput.value = '';
+      showToast('✓ Sent to PC clipboard!');
+    } else {
+      showToast('Failed to send', '#ff6584');
+    }
+  } catch {
+    showToast('Connection error', '#ff6584');
+  }
+});
+
+renderClipHistory();
+
 // ── Received files ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('search-input');
 const sortSelect  = document.getElementById('sort-select');
@@ -579,6 +697,27 @@ def list_files():
                 "mtime": mtime_ts,
             })
     return jsonify({"files": files})
+
+
+@app.route("/clipboard", methods=["POST"])
+def clipboard():
+    data = request.get_json(silent=True)
+    if not data or "text" not in data:
+        return jsonify({"error": "No text provided"}), 400
+    text = data["text"]
+    try:
+        # Windows: pipe text into clip.exe
+        proc = subprocess.run(
+            ["clip"],
+            input=text.encode("utf-16-le"),
+            check=True,
+        )
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        preview = text[:60] + ("…" if len(text) > 60 else "")
+        print(f"  📋 Clipboard: \"{preview}\"  [{timestamp}]")
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/download/<path:filename>")
