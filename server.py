@@ -256,6 +256,37 @@ HTML = """
   .dl-btn:hover { background: rgba(108,99,255,.3); }
   .empty { color: var(--muted); text-align: center; padding: 20px 0; font-size: .88rem; }
 
+  /* ── Sort & filter bar ── */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .filter-bar input {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 11px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: .85rem;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .filter-bar input:focus { border-color: var(--accent); }
+  .filter-bar select {
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: .82rem;
+    outline: none;
+    cursor: pointer;
+  }
+
   /* ── Toast ── */
   #toast {
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -293,6 +324,17 @@ HTML = """
 <!-- Received files card -->
 <div class="card">
   <h2>📥 Files on PC</h2>
+  <div class="filter-bar">
+    <input type="search" id="search-input" placeholder="Search files…"/>
+    <select id="sort-select">
+      <option value="date-desc">Newest first</option>
+      <option value="date-asc">Oldest first</option>
+      <option value="name-asc">Name A–Z</option>
+      <option value="name-desc">Name Z–A</option>
+      <option value="size-desc">Largest first</option>
+      <option value="size-asc">Smallest first</option>
+    </select>
+  </div>
   <div id="received-list"><p class="empty">Loading…</p></div>
 </div>
 
@@ -433,27 +475,56 @@ uploadBtn.addEventListener('click', async () => {
 });
 
 // ── Received files ────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search-input');
+const sortSelect  = document.getElementById('sort-select');
+let allFiles = [];
+
+function renderReceived() {
+  const query   = searchInput.value.trim().toLowerCase();
+  const sortKey = sortSelect.value;
+
+  let files = allFiles.filter(f => f.name.toLowerCase().includes(query));
+
+  files.sort((a, b) => {
+    if (sortKey === 'name-asc')   return a.name.localeCompare(b.name);
+    if (sortKey === 'name-desc')  return b.name.localeCompare(a.name);
+    if (sortKey === 'size-asc')   return a.size_bytes - b.size_bytes;
+    if (sortKey === 'size-desc')  return b.size_bytes - a.size_bytes;
+    if (sortKey === 'date-asc')   return a.mtime - b.mtime;
+    return b.mtime - a.mtime; // date-desc (default)
+  });
+
+  if (!files.length) {
+    receivedEl.innerHTML = query
+      ? `<p class="empty">No files match "<strong>${query}</strong>"</p>`
+      : '<p class="empty">No files yet</p>';
+    return;
+  }
+
+  receivedEl.innerHTML = files.map(f => `
+    <div class="file-row">
+      <span class="name">${f.name}</span>
+      <span class="meta">${f.size} · ${f.date}</span>
+      <a class="dl-btn" href="/download/${encodeURIComponent(f.name)}" download>↓ Get</a>
+    </div>`).join('');
+}
+
 async function loadReceived() {
   try {
     const res  = await fetch('/files');
     const data = await res.json();
-    if (!data.files.length) {
-      receivedEl.innerHTML = '<p class="empty">No files yet</p>';
-      return;
-    }
-    receivedEl.innerHTML = data.files.map(f => `
-      <div class="file-row">
-        <span class="name">${f.name}</span>
-        <span class="meta">${f.size} · ${f.date}</span>
-        <a class="dl-btn" href="/download/${encodeURIComponent(f.name)}" download>↓ Get</a>
-      </div>`).join('');
+    allFiles = data.files;
+    renderReceived();
   } catch {
     receivedEl.innerHTML = '<p class="empty">Could not load file list</p>';
   }
 }
 
+searchInput.addEventListener('input', renderReceived);
+sortSelect.addEventListener('change', renderReceived);
+
 loadReceived();
-setInterval(loadReceived, 5000); // auto-refresh every 5 s
+setInterval(loadReceived, 5000);
 </script>
 </body>
 </html>
@@ -498,8 +569,15 @@ def list_files():
             else:
                 size_str = f"{size_bytes/1024**3:.2f} GB"
 
-            mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%b %d, %H:%M")
-            files.append({"name": p.name, "size": size_str, "date": mtime})
+            mtime_ts = p.stat().st_mtime
+            mtime = datetime.fromtimestamp(mtime_ts).strftime("%b %d, %H:%M")
+            files.append({
+                "name": p.name,
+                "size": size_str,
+                "size_bytes": size_bytes,
+                "date": mtime,
+                "mtime": mtime_ts,
+            })
     return jsonify({"files": files})
 
 
