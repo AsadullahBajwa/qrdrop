@@ -5,10 +5,12 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+import io
 import qrcode
 import subprocess
 import sys
-from flask import Flask, render_template_string, request, send_from_directory, jsonify
+from PIL import Image
+from flask import Flask, render_template_string, request, send_from_directory, jsonify, send_file
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT = 5000
@@ -244,6 +246,58 @@ HTML = """
   .file-row:last-child { border-bottom: none; }
   .file-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-row .meta { color: var(--muted); font-size: .75rem; white-space: nowrap; }
+  /* ── Thumbnail ── */
+  .thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .file-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+  /* ── Lightbox ── */
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.88);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img {
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: 10px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.6);
+  }
+  #lightbox-close {
+    position: absolute;
+    top: 16px; right: 16px;
+    background: rgba(255,255,255,.15);
+    border: none;
+    color: #fff;
+    font-size: 1.4rem;
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
   .dl-btn {
     text-decoration: none;
     background: rgba(108,99,255,.15);
@@ -419,6 +473,10 @@ HTML = """
   <div id="received-list"><p class="empty">Loading…</p></div>
 </div>
 
+<div id="lightbox">
+  <button id="lightbox-close">✕</button>
+  <img id="lightbox-img" src="" alt=""/>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -632,13 +690,35 @@ function renderReceived() {
     return;
   }
 
-  receivedEl.innerHTML = files.map(f => `
+  const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','svg','heic','heif']);
+  const VIDEO_EXTS = new Set(['mp4','mov','avi','mkv','webm']);
+  const AUDIO_EXTS = new Set(['mp3','wav','ogg','m4a','aac','flac']);
+  const DOC_EXTS   = new Set(['pdf','doc','docx','xls','xlsx','ppt','pptx']);
+
+  function fileIcon(name) {
+    const ext = name.split('.').pop().toLowerCase();
+    if (VIDEO_EXTS.has(ext)) return '🎬';
+    if (AUDIO_EXTS.has(ext)) return '🎵';
+    if (DOC_EXTS.has(ext))   return '📄';
+    if (ext === 'zip' || ext === 'rar' || ext === '7z') return '🗜️';
+    return '📁';
+  }
+
+  receivedEl.innerHTML = files.map(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const isImg = IMAGE_EXTS.has(ext);
+    const mediaEl = isImg
+      ? `<img class="thumb" src="/thumbnail/${encodeURIComponent(f.name)}" loading="lazy" onclick="openLightbox('/download/${encodeURIComponent(f.name)}')" alt="${f.name}"/>`
+      : `<div class="file-icon">${fileIcon(f.name)}</div>`;
+    return `
     <div class="file-row" id="row-${CSS.escape(f.name)}">
+      ${mediaEl}
       <span class="name">${f.name}</span>
       <span class="meta">${f.size} · ${f.date}</span>
       <a class="dl-btn" href="/download/${encodeURIComponent(f.name)}" download>↓ Get</a>
       <button class="del-btn" onclick="deleteFile(${JSON.stringify(f.name)})">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function loadReceived() {
@@ -651,6 +731,18 @@ async function loadReceived() {
     receivedEl.innerHTML = '<p class="empty">Could not load file list</p>';
   }
 }
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+const lightbox      = document.getElementById('lightbox');
+const lightboxImg   = document.getElementById('lightbox-img');
+const lightboxClose = document.getElementById('lightbox-close');
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.classList.add('open');
+}
+lightboxClose.addEventListener('click', () => lightbox.classList.remove('open'));
+lightbox.addEventListener('click', e => { if (e.target === lightbox) lightbox.classList.remove('open'); });
 
 async function deleteFile(name) {
   if (!confirm(`Delete "${name}" from PC?`)) return;
@@ -748,6 +840,25 @@ def clipboard():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/thumbnail/<path:filename>")
+def thumbnail(filename):
+    target = (UPLOAD_DIR / filename).resolve()
+    if not str(target).startswith(str(UPLOAD_DIR.resolve())) or not target.exists():
+        return "", 404
+    try:
+        img = Image.open(target)
+        img.thumbnail((120, 120))
+        buf = io.BytesIO()
+        fmt = "JPEG" if img.mode in ("RGB", "L") else "PNG"
+        if img.mode == "RGBA" and fmt == "JPEG":
+            img = img.convert("RGB")
+        img.save(buf, format=fmt, quality=75)
+        buf.seek(0)
+        return send_file(buf, mimetype=f"image/{fmt.lower()}")
+    except Exception:
+        return "", 415
 
 
 @app.route("/delete/<path:filename>", methods=["DELETE"])
