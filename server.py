@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import io
+import zipfile
 import qrcode
 import subprocess
 import sys
@@ -325,6 +326,30 @@ HTML = """
   .del-btn:hover { background: rgba(255,101,132,.28); }
   .empty { color: var(--muted); text-align: center; padding: 20px 0; font-size: .88rem; }
 
+  /* ── Card header with action button ── */
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .card-header h2 { margin-bottom: 0; }
+  .zip-btn {
+    text-decoration: none;
+    background: rgba(16,185,129,.15);
+    color: #10b981;
+    border: none;
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: .78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .2s;
+  }
+  .zip-btn:hover { background: rgba(16,185,129,.3); }
+  .zip-btn:disabled { opacity: .45; cursor: default; }
+
   /* ── Sort & filter bar ── */
   .filter-bar {
     display: flex;
@@ -458,7 +483,10 @@ HTML = """
 
 <!-- Received files card -->
 <div class="card">
-  <h2>📥 Files on PC</h2>
+  <div class="card-header">
+    <h2>📥 Files on PC</h2>
+    <button class="zip-btn" id="zip-btn" onclick="downloadZip()">⬇ Download All (.zip)</button>
+  </div>
   <div class="filter-bar">
     <input type="search" id="search-input" placeholder="Search files…"/>
     <select id="sort-select">
@@ -683,6 +711,8 @@ function renderReceived() {
     return b.mtime - a.mtime; // date-desc (default)
   });
 
+  zipBtn.disabled = allFiles.length === 0;
+
   if (!files.length) {
     receivedEl.innerHTML = query
       ? `<p class="empty">No files match "<strong>${query}</strong>"</p>`
@@ -730,6 +760,25 @@ async function loadReceived() {
   } catch {
     receivedEl.innerHTML = '<p class="empty">Could not load file list</p>';
   }
+}
+
+// ── Zip download ─────────────────────────────────────────────────────────────
+const zipBtn = document.getElementById('zip-btn');
+
+function downloadZip() {
+  if (!allFiles.length) return;
+  zipBtn.disabled = true;
+  zipBtn.textContent = '⏳ Zipping…';
+  const a = document.createElement('a');
+  a.href = '/download-zip';
+  a.download = 'qrdrop-files.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => {
+    zipBtn.disabled = false;
+    zipBtn.textContent = '⬇ Download All (.zip)';
+  }, 3000);
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
@@ -840,6 +889,26 @@ def clipboard():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/download-zip")
+def download_zip():
+    files = [p for p in UPLOAD_DIR.iterdir() if p.is_file()]
+    if not files:
+        return jsonify({"error": "No files to zip"}), 404
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            zf.write(p, p.name)
+    buf.seek(0)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"  📦 Zip download: {len(files)} file(s)  [{timestamp}]")
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="qrdrop-files.zip",
+    )
 
 
 @app.route("/thumbnail/<path:filename>")
