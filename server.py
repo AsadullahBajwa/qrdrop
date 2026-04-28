@@ -256,6 +256,19 @@ HTML = """
     transition: background .2s;
   }
   .dl-btn:hover { background: rgba(108,99,255,.3); }
+  .del-btn {
+    background: rgba(255,101,132,.12);
+    color: var(--accent2);
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: .78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .2s;
+  }
+  .del-btn:hover { background: rgba(255,101,132,.28); }
   .empty { color: var(--muted); text-align: center; padding: 20px 0; font-size: .88rem; }
 
   /* ── Sort & filter bar ── */
@@ -620,10 +633,11 @@ function renderReceived() {
   }
 
   receivedEl.innerHTML = files.map(f => `
-    <div class="file-row">
+    <div class="file-row" id="row-${CSS.escape(f.name)}">
       <span class="name">${f.name}</span>
       <span class="meta">${f.size} · ${f.date}</span>
       <a class="dl-btn" href="/download/${encodeURIComponent(f.name)}" download>↓ Get</a>
+      <button class="del-btn" onclick="deleteFile(${JSON.stringify(f.name)})">✕</button>
     </div>`).join('');
 }
 
@@ -635,6 +649,22 @@ async function loadReceived() {
     renderReceived();
   } catch {
     receivedEl.innerHTML = '<p class="empty">Could not load file list</p>';
+  }
+}
+
+async function deleteFile(name) {
+  if (!confirm(`Delete "${name}" from PC?`)) return;
+  try {
+    const res = await fetch('/delete/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (res.ok) {
+      allFiles = allFiles.filter(f => f.name !== name);
+      renderReceived();
+      showToast('🗑 Deleted: ' + name, '#ff6584');
+    } else {
+      showToast('Delete failed', '#ff6584');
+    }
+  } catch {
+    showToast('Connection error', '#ff6584');
   }
 }
 
@@ -718,6 +748,19 @@ def clipboard():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/delete/<path:filename>", methods=["DELETE"])
+def delete_file(filename):
+    target = (UPLOAD_DIR / filename).resolve()
+    if not str(target).startswith(str(UPLOAD_DIR.resolve())):
+        return jsonify({"error": "Invalid path"}), 400
+    if not target.exists():
+        return jsonify({"error": "File not found"}), 404
+    target.unlink()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"  🗑  Deleted: {filename}  [{timestamp}]")
+    return jsonify({"deleted": filename}), 200
 
 
 @app.route("/download/<path:filename>")
